@@ -16,7 +16,7 @@ Zero Trust Gateway (HTTP 정책: Forensic copy)
                      Worker  forensic-file-tracker
                      [1단계] 디코딩 → 파일 추출 → SHA-256 → RequestID 조인 → 파일명 확정  ✅
                      [2단계] cron(1분) → D1 적재 + /api/transfers 조회                   ✅
-                     [3단계] Worker가 띄우는 대시보드                                    ⏳
+                     [3단계] Worker가 띄우는 대시보드 (https://<worker>.workers.dev/)    ✅
 ```
 
 ### D1 구조 (2단계)
@@ -68,6 +68,23 @@ npm run deploy
 ```
 
 ## 3. 사용
+
+### 대시보드 (3단계)
+
+브라우저에서 Worker 주소(`https://<worker>.workers.dev/`)를 열고 `LOOKUP_TOKEN`을 입력합니다.
+토큰은 그 탭에만 보관되고 탭을 닫으면 지워집니다.
+
+- 상단: 기간(오늘/7일/30일 또는 날짜 직접 지정)과 Email · Device name · Host · Application · File name 필터
+- 요약: 파일 전송 건수, 사용자 수, 기기 수, 총 용량, HTTP 로그 대기(사용자·기기 정보가 아직 없는 파일)
+- 일별 파일 전송 차트, 상위 Host / 상위 사용자
+- 전송 내역 표: Time · Email · Device name · Host · Application name · File name · 크기 · 파일명 근거 + **원본 다운로드**
+- 우측 상단: 마지막 적재 시각 (10분 넘게 멈추면 ⚠ 표시)
+
+페이지 자체에는 데이터가 없고 토큰으로 `/api/*`를 호출하는 구조입니다. 그래도 **Cloudflare Access를
+앞에 두는 것을 권장**합니다: Workers & Pages → Worker → Settings → Domains & Routes → workers.dev 옆
+**Enable Cloudflare Access** → 허용할 이메일/그룹 지정. 그러면 허용된 사람만 페이지에 도달하고,
+토큰은 두 번째 잠금으로 남습니다.
+
 
 모든 요청에 `Authorization: Bearer <LOOKUP_TOKEN>` 헤더가 필요합니다.
 
@@ -128,7 +145,7 @@ curl -H "Authorization: Bearer local-test-token" http://127.0.0.1:8787/api/trans
 ## 주의
 
 - **민감 데이터**: Forensic copy는 메타데이터가 아니라 실제 요청 본문/파일입니다. `LOOKUP_TOKEN`을
-  공유 범위에 맞게 관리하고, 3단계 대시보드는 Cloudflare Access로 보호할 예정입니다.
+  공유 범위에 맞게 관리하고, 대시보드는 Cloudflare Access로 한 번 더 보호하세요 (위 "대시보드" 참고).
 - **암호화 아님**: `Payload`는 base64(+`Content-Encoding`에 따른 gzip/deflate/br)일 뿐이라
   복호화 키가 필요 없습니다 (`src/decode.ts`).
 - **`FileInfo` 구조**: Cloudflare 문서엔 "object"로만 나와 있어 `files[].file_name/file_hash/...`

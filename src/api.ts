@@ -6,6 +6,7 @@ import { ensureSchema } from "./schema";
 /**
  * Step 2 read API over D1 (all token-gated, see http_util.authorize):
  *   GET  /api/transfers   file transfers: email, device, time, host, app, filename (+ filters)
+ *   GET  /api/summary     dashboard aggregates over the same filters
  *   GET  /api/files/<request_id>/<sha256>   download the stored file
  *   GET  /api/status      is data arriving? row counts + latest ingested objects
  *   POST /api/ingest      run ingestion now instead of waiting for the cron
@@ -59,11 +60,15 @@ const CONTAINS_FILTERS: [param: string, column: string][] = [
   ["file", "file_name"],
 ];
 
-/** GET /api/transfers?from=&to=&email=&device=&host=&app=&file=&limit=&offset=
- * Text filters are case-insensitive "contains"; from/to filter on the
- * forensic copy time (to is exclusive; a bare date includes that whole day). */
-async function handleTransfers(url: URL, env: Env): Promise<Response> {
-  const p = url.searchParams;
+interface Filter {
+  whereSql: string;
+  args: (string | number)[];
+}
+
+/** Shared by /api/transfers and /api/summary. Text filters are
+ * case-insensitive "contains"; from/to filter on the forensic copy time
+ * (to is exclusive; a bare date includes that whole day). */
+function buildFilter(p: URLSearchParams): Filter | Response {
   const where: string[] = [];
   const args: (string | number)[] = [];
 
@@ -84,10 +89,18 @@ async function handleTransfers(url: URL, env: Env): Promise<Response> {
     where.push(`${column} LIKE ? ESCAPE '\\'`);
     args.push(likeContains(v));
   }
+  return { whereSql: where.length ? `WHERE ${where.join(" AND ")}` : "", args };
+}
+
+/** GET /api/transfers?from=&to=&email=&device=&host=&app=&file=&limit=&offset= */
+async function handleTransfers(url: URL, env: Env): Promise<Response> {
+  const p = url.searchParams;
+  const filter = buildFilter(p);
+  if (filter instanceof Response) return filter;
+  const { whereSql, args } = filter;
 
   const limit = Math.min(Math.max(Number(p.get("limit") ?? DEFAULT_LIMIT) || DEFAULT_LIMIT, 1), MAX_LIMIT);
   const offset = Math.max(Number(p.get("offset") ?? 0) || 0, 0);
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
   const [rows, total] = await env.DB.batch<TransferRow | { n: number }>([
     env.DB.prepare(`SELECT * FROM file_transfers ${whereSql} ORDER BY ts DESC LIMIT ? OFFSET ?`).bind(...args, limit, offset),
@@ -118,6 +131,49 @@ async function handleTransfers(url: URL, env: Env): Promise<Response> {
   }));
 
   return json({ total: (total!.results[0] as { n: number } | undefined)?.n ?? 0, limit, offset, items });
+}
+
+const TOP_N = 5;
+
+/** GET /api/summary -- dashboard aggregates over the same filters as
+ * /api/transfers: totals, per-UTC-day counts, top hosts and users. */
+async function handleSummary(url: URL, env: Env): Promise<Response> {
+  const filter = buildFilter(url.searchParams);
+  if (filter instanceof Response) return filter;
+  const { whereSql, args } = filter;
+  const and = whereSql ? `${whereSql} AND` : "WHERE";
+
+  const [totals, byDay, topHosts, topUsers] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT count(*) AS transfers, count(DISTINCT email) AS users, count(DISTINCT device_name) AS devices,
+              COALESCE(sum(size), 0) AS bytes, COALESCE(sum(http_matched = 0), 0) AS waiting_for_http
+       FROM file_transfers ${whereSql}`,
+    ).bind(...args),
+    env.DB.prepare(
+      `SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day, count(*) AS n
+       FROM file_transfers ${whereSql} GROUP BY day ORDER BY day`,
+    ).bind(...args),
+    env.DB.prepare(
+      `SELECT host AS label, count(*) AS n FROM file_transfers ${and} host IS NOT NULL
+       GROUP BY host ORDER BY n DESC, host LIMIT ${TOP_N}`,
+    ).bind(...args),
+    env.DB.prepare(
+      `SELECT email AS label, count(*) AS n FROM file_transfers ${and} email IS NOT NULL
+       GROUP BY email ORDER BY n DESC, email LIMIT ${TOP_N}`,
+    ).bind(...args),
+  ]);
+
+  const t = totals!.results[0] as Record<string, number>;
+  return json({
+    transfers: t.transfers ?? 0,
+    users: t.users ?? 0,
+    devices: t.devices ?? 0,
+    bytes: t.bytes ?? 0,
+    waitingForHttp: t.waiting_for_http ?? 0,
+    byDay: byDay!.results,
+    topHosts: topHosts!.results,
+    topUsers: topUsers!.results,
+  });
 }
 
 /** GET /api/files/<request_id>/<sha256> */
@@ -189,6 +245,7 @@ export async function handleApiRoutes(request: Request, env: Env): Promise<Respo
   }
   if (request.method !== "GET") return json({ error: "Method not allowed" }, 405);
   if (url.pathname === "/api/transfers") return handleTransfers(url, env);
+  if (url.pathname === "/api/summary") return handleSummary(url, env);
   if (url.pathname === "/api/status") return handleStatus(env);
   if (url.pathname.startsWith("/api/files/")) return handleFile(url.pathname, env);
   return json({ error: "Not found" }, 404);

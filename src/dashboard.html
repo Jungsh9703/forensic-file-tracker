@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>파일 전송 모니터</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f5f5f3;
+    --surface-1: #fcfcfb;
+    --border: #e4e3df;
+    --grid: #ecebe7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #6f6e69;
+    --series-1: #2a78d6;
+    --series-1-wash: rgba(42, 120, 214, 0.10);
+    --accent: #2a78d6;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --focus: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-0: #121211;
+      --surface-1: #1a1a19;
+      --border: #30302d;
+      --grid: #2a2a28;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #9a998f;
+      --series-1: #3987e5;
+      --series-1-wash: rgba(57, 135, 229, 0.14);
+      --accent: #3987e5;
+      --focus: #6da7ec;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --border: #30302d;
+    --grid: #2a2a28;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #9a998f;
+    --series-1: #3987e5;
+    --series-1-wash: rgba(57, 135, 229, 0.14);
+    --accent: #3987e5;
+    --focus: #6da7ec;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+  }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 600; }
+  h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; color: var(--text-primary); }
+  .muted { color: var(--text-muted); }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  .status[data-state="stale"] .dot { background: var(--warning); }
+  .status[data-state="ok"] .dot { background: #0ca30c; }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  button, input {
+    font: inherit; color: inherit; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-height: 34px;
+  }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  /* Token gate */
+  #gate { max-width: 440px; margin: 64px auto; }
+  #gate form { display: flex; gap: 8px; margin-top: 12px; }
+  #gate input { flex: 1; min-width: 0; }
+  .error { color: var(--critical); font-size: 13px; margin-top: 8px; }
+
+  /* Filters: one row above the charts */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+  .filters .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .filters .seg button { border: 0; border-radius: 0; }
+  .filters .seg button[aria-pressed="true"] { background: var(--series-1-wash); color: var(--accent); font-weight: 600; }
+  .filters input[type="text"] { width: 116px; }
+  .filters input[type="date"] { width: 140px; }
+
+  /* Figures */
+  .figures { display: grid; grid-template-columns: minmax(200px, 1.4fr) repeat(4, minmax(120px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile .label { font-size: 13px; color: var(--text-secondary); }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
+  .tile.hero .value { font-size: 48px; line-height: 1.1; }
+  .tile .sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  .grid2 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+
+  /* Column chart */
+  #chart { position: relative; }
+  #chart svg { display: block; width: 100%; height: 220px; overflow: visible; }
+  #chart .axis text { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  #chart .gridline { stroke: var(--grid); stroke-width: 1; }
+  #chart .bar { fill: var(--series-1); }
+  #chart .hit { fill: transparent; cursor: default; }
+  #chart .hit:hover + .bar, #chart .bar.hover { opacity: .85; }
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 2;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); white-space: nowrap;
+  }
+  .tooltip b { font-variant-numeric: tabular-nums; }
+
+  /* Horizontal bar lists */
+  .bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .bars li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; }
+  .bars .name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bars .n { font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .bars .track { grid-column: 1 / -1; height: 8px; }
+  .bars .fill { height: 8px; background: var(--series-1); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .empty { color: var(--text-muted); font-size: 13px; }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { font-weight: 600; color: var(--text-secondary); white-space: nowrap; position: sticky; top: 0; background: var(--surface-1); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.file { font-weight: 600; word-break: break-all; }
+  td.nowrap { white-space: nowrap; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--text-secondary); white-space: nowrap; }
+  .pager { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; gap: 8px; flex-wrap: wrap; }
+  .null { color: var(--text-muted); }
+
+  @media (max-width: 960px) {
+    .figures { grid-template-columns: repeat(2, 1fr); }
+    .figures .hero { grid-column: 1 / -1; }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>파일 전송 모니터</h1>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <span class="status" id="status" role="status"><span class="dot" aria-hidden="true"></span><span id="status-text">상태 확인 중…</span></span>
+      <button id="lock" hidden>잠금</button>
+    </div>
+  </header>
+
+  <section id="gate" class="card" hidden>
+    <h2>접근 토큰</h2>
+    <div class="muted">Worker에 설정한 <code>LOOKUP_TOKEN</code> 값을 입력하세요. 이 브라우저 탭을 닫으면 지워집니다.</div>
+    <form id="gate-form">
+      <input id="gate-token" type="password" autocomplete="off" aria-label="LOOKUP_TOKEN" required>
+      <button class="primary" type="submit">열기</button>
+    </form>
+    <div class="error" id="gate-error" role="alert"></div>
+  </section>
+
+  <main id="app" hidden>
+    <form class="filters" id="filters">
+      <div class="seg" role="group" aria-label="기간">
+        <button type="button" data-range="1">오늘</button>
+        <button type="button" data-range="7" aria-pressed="true">7일</button>
+        <button type="button" data-range="30">30일</button>
+      </div>
+      <input type="date" name="from" aria-label="시작일">
+      <span class="muted">~</span>
+      <input type="date" name="to" aria-label="종료일">
+      <input type="text" name="email" placeholder="Email" aria-label="Email">
+      <input type="text" name="device" placeholder="Device name" aria-label="Device name">
+      <input type="text" name="host" placeholder="Host" aria-label="Host">
+      <input type="text" name="app" placeholder="Application" aria-label="Application name">
+      <input type="text" name="file" placeholder="File name" aria-label="File name">
+      <button class="primary" type="submit">검색</button>
+      <button type="button" id="reset">초기화</button>
+    </form>
+
+    <section class="figures">
+      <div class="card tile hero"><div class="label">파일 전송</div><div class="value" id="f-transfers">–</div><div class="sub" id="f-range"></div></div>
+      <div class="card tile"><div class="label">사용자</div><div class="value" id="f-users">–</div></div>
+      <div class="card tile"><div class="label">기기</div><div class="value" id="f-devices">–</div></div>
+      <div class="card tile"><div class="label">총 용량</div><div class="value" id="f-bytes">–</div></div>
+      <div class="card tile"><div class="label">HTTP 로그 대기</div><div class="value" id="f-waiting">–</div><div class="sub">사용자·기기 정보가 아직 없는 파일</div></div>
+    </section>
+
+    <section class="grid2">
+      <div class="card"><h2>일별 파일 전송</h2><div id="chart"></div></div>
+      <div class="card"><h2>상위 Host</h2><ul class="bars" id="top-hosts"></ul></div>
+      <div class="card"><h2>상위 사용자</h2><ul class="bars" id="top-users"></ul></div>
+    </section>
+
+    <section class="card">
+      <h2>전송 내역</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th><th>Email</th><th>Device name</th><th>Host</th><th>Application name</th>
+              <th>File name</th><th style="text-align:right">크기</th><th>파일명 근거</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span class="muted" id="page-info"></span>
+        <span style="display:flex;gap:8px">
+          <button type="button" id="prev">이전</button>
+          <button type="button" id="next">다음</button>
+        </span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const PAGE = 50;
+  const STORE_KEY = "fft_token";
+  const DAY = 86400000;
+  const $ = (id) => document.getElementById(id);
+
+  // Token lives in sessionStorage only (cleared with the tab). Storage can
+  // throw in private modes -- fall back to memory.
+  let memToken = null;
+  const getToken = () => { try { return sessionStorage.getItem(STORE_KEY) || memToken; } catch { return memToken; } };
+  const setToken = (t) => { memToken = t; try { t ? sessionStorage.setItem(STORE_KEY, t) : sessionStorage.removeItem(STORE_KEY); } catch {} };
+
+  class AuthError extends Error {}
+  async function api(path) {
+    const res = await fetch(path, { headers: { authorization: `Bearer ${getToken()}` } });
+    if (res.status === 401 || res.status === 503) throw new AuthError((await res.json().catch(() => ({}))).error || "Unauthorized");
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    return res;
+  }
+
+  // ---- formatting ----
+  const nf = new Intl.NumberFormat("ko-KR");
+  const compact = (n) => n >= 1000 ? new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n) : nf.format(n);
+  function bytes(n) {
+    if (!n) return "0 B";
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), u.length - 1);
+    return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${u[i]}`;
+  }
+  const dtf = new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+  function ago(iso) {
+    const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+    if (s < 90) return "방금 전";
+    if (s < 3600) return `${Math.round(s / 60)}분 전`;
+    if (s < 86400) return `${Math.round(s / 3600)}시간 전`;
+    return `${Math.round(s / 86400)}일 전`;
+  }
+  function el(tag, attrs = {}, ...children) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else e.setAttribute(k, v);
+    }
+    for (const c of children) e.append(c);
+    return e;
+  }
+  const cell = (v, cls) => v == null || v === "" ? el("td", { class: (cls || "") + " null", text: "—" }) : el("td", { class: cls || "", text: String(v) });
+
+  // ---- filters ----
+  const form = $("filters");
+  let offset = 0;
+  function setRange(days) {
+    const today = utcDay(Date.now());
+    form.from.value = utcDay(Date.now() - (days - 1) * DAY);
+    form.to.value = today;
+    for (const b of form.querySelectorAll("[data-range]")) b.setAttribute("aria-pressed", String(b.dataset.range === String(days)));
+  }
+  function query() {
+    const p = new URLSearchParams();
+    for (const name of ["from", "to", "email", "device", "host", "app", "file"]) {
+      const v = form[name].value.trim();
+      if (v) p.set(name, v);
+    }
+    return p;
+  }
+  form.addEventListener("submit", (e) => { e.preventDefault(); offset = 0; load(); });
+  for (const b of form.querySelectorAll("[data-range]")) b.addEventListener("click", () => { setRange(Number(b.dataset.range)); offset = 0; load(); });
+  for (const n of ["from", "to"]) form[n].addEventListener("change", () => { for (const b of form.querySelectorAll("[data-range]")) b.setAttribute("aria-pressed", "false"); });
+  $("reset").addEventListener("click", () => { form.reset(); setRange(7); offset = 0; load(); });
+  $("prev").addEventListener("click", () => { offset = Math.max(0, offset - PAGE); loadRows(); });
+  $("next").addEventListener("click", () => { offset += PAGE; loadRows(); });
+
+  // ---- figures ----
+  function renderFigures(s, p) {
+    $("f-transfers").textContent = compact(s.transfers);
+    $("f-users").textContent = compact(s.users);
+    $("f-devices").textContent = compact(s.devices);
+    $("f-bytes").textContent = bytes(s.bytes);
+    $("f-waiting").textContent = compact(s.waitingForHttp);
+    $("f-range").textContent = p.get("from") || p.get("to") ? `${p.get("from") || "처음"} ~ ${p.get("to") || "현재"} (UTC)` : "전체 기간";
+  }
+
+  // ---- daily column chart (single series: one color, no legend; title names it) ----
+  function niceMax(v) {
+    if (v <= 4) return 4;
+    if (v <= 10) return v % 2 ? v + 1 : v;
+    const pow = 10 ** Math.floor(Math.log10(v));
+    for (const m of [1, 2, 2.5, 5, 10]) if (m * pow >= v) return m * pow;
+    return 10 * pow;
+  }
+  function renderChart(byDay, p) {
+    const host = $("chart");
+    host.replaceChildren();
+    const counts = new Map(byDay.map((d) => [d.day, d.n]));
+    const start = p.get("from") || (byDay[0] && byDay[0].day) || utcDay(Date.now());
+    const end = p.get("to") || utcDay(Date.now());
+    const days = [];
+    for (let t = Date.parse(start + "T00:00:00Z"); t <= Date.parse(end + "T00:00:00Z") && days.length < 366; t += DAY) days.push(utcDay(t));
+    if (!days.length) days.push(utcDay(Date.now()));
+
+    const W = Math.max(host.clientWidth, 280), H = 220, m = { l: 36, r: 8, t: 12, b: 26 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const max = niceMax(Math.max(0, ...days.map((d) => counts.get(d) || 0)));
+    const band = pw / days.length;
+    const bw = Math.max(2, Math.min(24, band * 0.6));
+    const y = (v) => m.t + ph - (v / max) * ph;
+    const NS = "http://www.w3.org/2000/svg";
+    const s = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+    const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `일별 파일 전송, ${days.length}일` });
+
+    const axis = s("g", { class: "axis" });
+    // Counts are whole numbers -- skip the midline tick when it would be fractional.
+    for (const v of [0, max / 2, max].filter(Number.isInteger)) {
+      axis.append(s("line", { class: "gridline", x1: m.l, x2: W - m.r, y1: y(v), y2: y(v) }));
+      const t = s("text", { x: m.l - 6, y: y(v) + 4, "text-anchor": "end" });
+      t.textContent = compact(v);
+      axis.append(t);
+    }
+    const every = Math.ceil(days.length / Math.max(1, Math.floor(pw / 56)));
+    days.forEach((d, i) => {
+      if (i % every !== 0 && i !== days.length - 1) return;
+      const t = s("text", { x: m.l + band * i + band / 2, y: H - 8, "text-anchor": "middle" });
+      t.textContent = d.slice(5);
+      axis.append(t);
+    });
+    svg.append(axis);
+
+    const tip = el("div", { class: "tooltip", hidden: "" });
+    days.forEach((d, i) => {
+      const n = counts.get(d) || 0;
+      const cx = m.l + band * i + band / 2;
+      const hit = s("rect", { class: "hit", x: m.l + band * i, y: m.t, width: band, height: ph });
+      svg.append(hit);
+      let bar = null;
+      if (n > 0) {
+        // 4px rounded data-end, square at the baseline.
+        const x0 = cx - bw / 2, x1 = cx + bw / 2, top = y(n), base = y(0);
+        const r = Math.min(4, bw / 2, base - top);
+        bar = s("path", { class: "bar", d: `M${x0},${base}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x1 - r}Q${x1},${top} ${x1},${top + r}V${base}Z` });
+        svg.append(bar);
+      }
+      hit.addEventListener("mouseenter", () => {
+        if (bar) bar.classList.add("hover");
+        tip.replaceChildren(el("div", { text: d + " (UTC)" }), el("div", {}, "파일 전송 ", el("b", { text: nf.format(n) }), "건"));
+        tip.hidden = false;
+        const left = Math.min(Math.max(cx - tip.offsetWidth / 2, 0), W - tip.offsetWidth);
+        tip.style.left = `${(left / W) * 100}%`;
+        tip.style.top = `${Math.max(0, y(n) - 52)}px`;
+      });
+      hit.addEventListener("mouseleave", () => { if (bar) bar.classList.remove("hover"); tip.hidden = true; });
+    });
+    host.append(svg, tip);
+  }
+
+  function renderBars(id, items) {
+    const ul = $(id);
+    ul.replaceChildren();
+    if (!items.length) { ul.append(el("li", { class: "empty", text: "데이터 없음" })); return; }
+    const max = Math.max(...items.map((i) => i.n));
+    for (const it of items) {
+      const fill = el("div", { class: "fill" });
+      fill.style.width = `${(it.n / max) * 100}%`;
+      ul.append(el("li", {}, el("span", { class: "name", title: it.label, text: it.label }), el("span", { class: "n", text: nf.format(it.n) }), el("div", { class: "track" }, fill)));
+    }
+  }
+
+  // ---- table ----
+  const MATCHED = { hash: "해시 일치", multipart: "업로드 이름", uploaded_file_names: "HTTP 로그", none: "알 수 없음" };
+  async function download(item, btn) {
+    btn.disabled = true;
+    try {
+      const res = await api(item.downloadPath);
+      const blob = await res.blob();
+      const cd = res.headers.get("content-disposition") || "";
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const name = star ? decodeURIComponent(star[1]) : item.fileName || `${item.sha256}.bin`;
+      const url = URL.createObjectURL(blob);
+      const a = el("a", { href: url, download: name });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) { handleError(e); } finally { btn.disabled = false; }
+  }
+  function renderRows(data) {
+    const tbody = $("rows");
+    tbody.replaceChildren();
+    if (!data.items.length) {
+      tbody.append(el("tr", {}, el("td", { colspan: "9", class: "empty", text: "조건에 맞는 파일 전송이 없습니다." })));
+    }
+    for (const it of data.items) {
+      const btn = el("button", { type: "button", text: "다운로드", "aria-label": `${it.fileName || it.sha256} 다운로드` });
+      btn.addEventListener("click", () => download(it, btn));
+      const tag = el("span", { class: "tag", title: it.truncated ? "Forensic copy가 잘려 원본과 다를 수 있음" : "", text: (MATCHED[it.matchedBy] || it.matchedBy) + (it.truncated ? " · 잘림" : "") });
+      tbody.append(el("tr", {},
+        el("td", { class: "time", title: it.time, text: dtf.format(new Date(it.time)) }),
+        cell(it.email), cell(it.deviceName, "nowrap"), cell(it.host), cell(it.applicationName),
+        el("td", { class: "file", title: `sha256 ${it.sha256}` }, it.fileName || "—"),
+        el("td", { class: "num", text: bytes(it.size) }),
+        el("td", {}, tag),
+        el("td", {}, btn),
+      ));
+    }
+    const from = data.total ? data.offset + 1 : 0;
+    $("page-info").textContent = `${nf.format(from)}–${nf.format(data.offset + data.items.length)} / ${nf.format(data.total)}건`;
+    $("prev").disabled = data.offset === 0;
+    $("next").disabled = data.offset + data.items.length >= data.total;
+  }
+
+  // ---- status ----
+  async function loadStatus() {
+    const s = await (await api("/api/status")).json();
+    const last = s.lastSeen.ingestRun;
+    const st = $("status");
+    if (!last) { st.dataset.state = "stale"; $("status-text").textContent = "아직 적재된 데이터 없음"; return; }
+    const stale = Date.now() - Date.parse(last) > 10 * 60000;
+    st.dataset.state = stale ? "stale" : "ok";
+    $("status-text").textContent = `${stale ? "⚠ 적재 지연 · " : ""}마지막 적재 ${ago(last)}`;
+    st.title = `마지막 적재 ${last}\nHTTP 행 ${s.rows.httpRequests} · 파일 ${s.rows.forensicFiles} · 처리한 R2 오브젝트 ${s.rows.ingestedObjects}`;
+  }
+
+  // ---- load ----
+  async function loadRows() {
+    const p = query();
+    p.set("limit", String(PAGE));
+    p.set("offset", String(offset));
+    renderRows(await (await api(`/api/transfers?${p}`)).json());
+  }
+  async function load() {
+    try {
+      const p = query();
+      const [summary] = await Promise.all([api(`/api/summary?${p}`).then((r) => r.json()), loadRows(), loadStatus()]);
+      renderFigures(summary, p);
+      renderChart(summary.byDay, p);
+      renderBars("top-hosts", summary.topHosts);
+      renderBars("top-users", summary.topUsers);
+      lastSummary = [summary, p];
+    } catch (e) { handleError(e); }
+  }
+  let lastSummary = null;
+  window.addEventListener("resize", () => { if (lastSummary) renderChart(lastSummary[0].byDay, lastSummary[1]); });
+
+  function showGate(msg) {
+    $("app").hidden = true; $("lock").hidden = true; $("gate").hidden = false;
+    $("gate-error").textContent = msg || "";
+    $("gate-token").focus();
+  }
+  function handleError(e) {
+    if (e instanceof AuthError) { setToken(null); showGate(e.message === "LOOKUP_TOKEN is not configured" ? "Worker에 LOOKUP_TOKEN이 설정되지 않았습니다." : "토큰이 올바르지 않습니다."); return; }
+    $("status").dataset.state = "stale";
+    $("status-text").textContent = `⚠ 오류: ${e.message}`;
+  }
+  function open() {
+    $("gate").hidden = true; $("app").hidden = false; $("lock").hidden = false;
+    load();
+  }
+  $("gate-form").addEventListener("submit", (e) => { e.preventDefault(); setToken($("gate-token").value.trim()); $("gate-token").value = ""; open(); });
+  $("lock").addEventListener("click", () => { setToken(null); showGate(); });
+
+  setRange(7);
+  getToken() ? open() : showGate();
+})();
+</script>
+</body>
+</html>

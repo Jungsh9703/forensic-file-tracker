@@ -94,8 +94,15 @@ Logpush ─┬─ dlp_forensic_copies ──▶ R2 forensic/   (Payload = base64
 - 다운로드(response phase) 파일, 파일이 아닌 forensic copy(프롬프트 등)는 D1에 저장하지 않음 — `/forensic/lookup`으로는 조회 가능
 - 보존 기간 정리(오래된 행/파일 삭제)
 
-## 3단계 — 대시보드
+## 3단계 — 대시보드 (완료)
 
-- 발신(사용자) · 수신(목적지 Host/URL) · 시간 · 전송 경로 · 파일명 · 해시 · 원본 열람 링크
-- Worker가 직접 제공하는 페이지(외부 대시보드 도구 없음) + Cloudflare Access 보호
-- 이상 징후 알림(대용량, 특정 확장자, 비업무 도메인 등)은 이 단계 이후 검토
+- Worker가 `/`(= `/dashboard`)에서 직접 페이지를 제공 — 외부 대시보드 도구 없음 (`src/dashboard.html`)
+- 데이터는 `/api/summary`(요약·일별·상위 Host/사용자)와 `/api/transfers`(목록)를 같은 필터로 조회
+- 표: Time · Email · Device name · Host · Application name · File name · 크기 · 파일명 근거 · 원본 다운로드
+- 인증: 페이지에서 `LOOKUP_TOKEN` 입력(sessionStorage) → Bearer로 API 호출. CSP로 자기 Worker 외 통신 차단
+- 권장: workers.dev에 Cloudflare Access 활성화 (사람 단위 접근 제어)
+
+### 이후 검토
+- 이상 징후 알림(대용량, 특정 확장자, 비업무 도메인 등)
+- 보존 기간 정리(오래된 D1 행 / R2 `files/` 삭제)
+- Forensic copy 없이 `gateway_http`에만 남은 업로드도 목록에 포함할지
