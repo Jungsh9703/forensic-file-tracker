@@ -1,0 +1,139 @@
+{
+  "title": "Gateway DLP Forensic Copies",
+  "uid": "gateway-forensic-copies",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 3,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "민감 데이터 -- 읽어보세요",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "이 대시보드는 **DLP Forensic Copies** Logpush job(별도 R2 prefix `forensic/`)에서 온 데이터입니다. `gateway-http-dlp` 대시보드가 보여주는 \"어떤 DLP 프로필이 걸렸는지\"와 달리, 여기 `body` 필드는 **실제로 매치된 요청/응답 본문 그 자체**입니다 (base64 디코딩 + 필요 시 gzip/deflate/br 압축 해제까지 마친 상태 -- 암호화된 데이터가 아닙니다, `src/forensic.ts` 참고).\n\n즉 프롬프트/응답 원문 같은 **실제 대화·문서 내용**이 평문으로 그대로 쌓입니다. 개인 테스트 목적으로만 쓰고, 이 대시보드/Loki 스트림(`job=\"gateway_forensic_logs\"`)에 대한 접근을 넓히기 전에 한 번 더 생각해주세요.\n\n**이 요청을 보낸 사용자(이메일)를 알고 싶다면**: 이 데이터셋 자체엔 사용자 정보가 없습니다(`AccountID, Datetime, ForensicCopyID, GatewayRequestID, Headers, Payload, Phase, TriggeredRuleID`가 전부). 대신 아래 로그 패널에서 관심 있는 항목의 `gateway_request_id` 값을 복사해서, Grafana Explore에서 아래 쿼리를 돌리면 그 요청의 이메일/호스트/정책명이 나옵니다 (같은 요청이라 `gateway_http`의 `request_id`와 값이 같습니다):\n\n```\n{job=\"gateway_http_logs\"} | json | request_id=\"<여기에 gateway_request_id 값>\"\n```"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Forensic copies (selected time range)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 6 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"gateway_forensic_logs\"} [$__range]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Forensic copies over time by phase",
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 6 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (phase) (count_over_time({job=\"gateway_forensic_logs\"} [$__interval]))",
+          "refId": "A",
+          "legendFormat": "{{phase}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Top triggered rules (selected time range)",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 14 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (triggered_rule_name) (count_over_time({job=\"gateway_forensic_logs\"} | json | triggered_rule_name != \"\" [$__range]))",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true },
+            "renameByName": {
+              "triggered_rule_name": "DLP Rule",
+              "Value #A": "Matches"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [{ "field": "Matches", "desc": true }]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Matches" },
+            "properties": [{ "id": "custom.width", "value": 100 }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Content types seen (selected time range)",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (content_type) (count_over_time({job=\"gateway_forensic_logs\"} | json | content_type != \"\" [$__range]))",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Decode errors (should stay empty)",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (decode_error) (count_over_time({job=\"gateway_forensic_logs\"} | json | decode_error != \"\" [$__range]))",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Recent forensic copies (full body)",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 26 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "expr": "{job=\"gateway_forensic_logs\"} | json",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

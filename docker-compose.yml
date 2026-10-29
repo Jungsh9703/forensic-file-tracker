@@ -1,0 +1,25 @@
+services:
+  # Local sanity-check stack only: filesystem-backed Loki + Grafana, so the
+  # Worker's filter/push logic can be exercised before pointing LOKI_URL at
+  # the real Azure-Blob-backed Loki on the VM (see ../loki-grafana-azure-vm/).
+  loki:
+    image: grafana/loki:2.9.6
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml
+    command: -config.file=/etc/loki/local-config.yaml
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/etc/grafana/dashboards
+    depends_on:
+      - loki

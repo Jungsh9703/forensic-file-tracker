@@ -1,0 +1,25 @@
+{
+  "name": "gateway-log-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "description": "All Cloudflare Zero Trust Gateway HTTP logs (not just errors): Logpush -> R2 -> Worker -> Loki -> Grafana dashboard",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "tail": "wrangler tail",
+    "seed:local": "node scripts/seed-sample-log.mjs"
+  },
+  "dependencies": {
+    "@hpke/chacha20poly1305": "^1.6.2",
+    "@hpke/core": "^1.6.2",
+    "@hpke/dhkem-x25519": "^1.6.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.6.3",
+    "wrangler": "^4.4.0"
+  }
+}
