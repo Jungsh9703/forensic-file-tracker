@@ -5,24 +5,44 @@ compatibility_date = "2025-04-01"
 # decompress forensic copy Payloads whose Headers carry Content-Encoding.
 compatibility_flags = ["nodejs_compat"]
 
-# Cloudflare only: Logpush -> R2 -> Workers (step 1), + D1 (step 2) and a
-# Worker-served dashboard (step 3). See docs/forensic-file-tracking.md.
+# Cloudflare only: Logpush -> R2 -> Workers -> D1 (+ a Worker-served
+# dashboard in step 3). See docs/forensic-file-tracking.md.
 
 # --- R2 bucket that receives BOTH Logpush jobs, under separate prefixes ---
 #   1. dataset "gateway_http"        -> prefix HTTP_LOG_PREFIX     ("http/")
 #   2. dataset "DLP forensic copies" -> prefix FORENSIC_LOG_PREFIX ("forensic/")
+# The ingester also writes extracted file bytes under FILES_PREFIX ("files/").
 [[r2_buckets]]
 binding = "LOGS_BUCKET"
 bucket_name = "sh-logpush-test"
 
+# --- D1 database (step 2). No database_id on purpose: `wrangler deploy`
+# (and the Deploy to Cloudflare button) creates it on first deploy and keeps
+# it linked afterwards. Tables are created by the Worker itself on first use
+# (src/schema.ts), so no separate migration step is needed.
+[[d1_databases]]
+binding = "DB"
+database_name = "forensic-file-tracker"
+
+# Pulls new Logpush objects from R2 into D1 every minute.
+[triggers]
+crons = ["*/1 * * * *"]
+
 [vars]
 HTTP_LOG_PREFIX = "http/"
 FORENSIC_LOG_PREFIX = "forensic/"
+FILES_PREFIX = "files/"
+
+# Per-run ingestion budget: new R2 objects per prefix, and how many UTC date
+# folders (today and back) to look in. Raise MAX_OBJECTS_PER_RUN if the
+# Worker's Metrics show runs falling behind; LOOKBACK_DAYS also sets how far
+# back the very first run backfills.
+MAX_OBJECTS_PER_RUN = "20"
+LOOKBACK_DAYS = "3"
 
 # Cap on R2 objects scanned per prefix for one GET /forensic/lookup call
-# (src/lookup.ts). Lookups scan R2 directly by date until step 2 (D1) lands,
-# so this bounds a single request's wall time on busy days.
+# (step 1's direct-from-R2 lookup, src/lookup.ts).
 MAX_LOOKUP_OBJECTS = "200"
 
 # --- Secrets (do NOT put these in this file) ---
-# wrangler secret put LOOKUP_TOKEN   # Bearer token for /forensic/lookup + /forensic/file -- returns real uploaded file contents, so those endpoints refuse to run without it
+# wrangler secret put LOOKUP_TOKEN   # Bearer token for /api/* and /forensic/* -- returns real uploaded file contents, so those endpoints refuse to run without it

@@ -21,14 +21,26 @@
       "LOGS_BUCKET": {
         "description": "R2 bucket both Logpush jobs write into (`forensic/` = DLP forensic copies, `http/` = Gateway HTTP). Use the name of the bucket your Logpush jobs already target."
       },
+      "DB": {
+        "description": "D1 database for file-transfer records (email, device, time, host, application, filename). Created automatically on first deploy; the Worker creates its own tables."
+      },
       "LOOKUP_TOKEN": {
-        "description": "Bearer token for `/forensic/lookup` and `/forensic/file`, which return real uploaded file contents. Generate a long random string, e.g. `openssl rand -hex 32`."
+        "description": "Bearer token for `/api/*` and `/forensic/*`, which return who-sent-what and real uploaded file contents. Generate a long random string, e.g. `openssl rand -hex 32`."
       },
       "HTTP_LOG_PREFIX": {
         "description": "R2 prefix of the Gateway HTTP Logpush job. Must match the job destination path."
       },
       "FORENSIC_LOG_PREFIX": {
         "description": "R2 prefix of the DLP forensic copies Logpush job. Must match the job destination path."
+      },
+      "FILES_PREFIX": {
+        "description": "R2 prefix where extracted file bytes are stored. Must not overlap the two Logpush prefixes."
+      },
+      "MAX_OBJECTS_PER_RUN": {
+        "description": "Max new Logpush objects ingested per prefix per cron run (every minute)."
+      },
+      "LOOKBACK_DAYS": {
+        "description": "How many UTC date folders (today and back) each run scans; also how far the first run backfills."
       },
       "MAX_LOOKUP_OBJECTS": {
         "description": "Max R2 objects scanned per prefix for one lookup request."

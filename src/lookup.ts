@@ -1,6 +1,7 @@
 import type { Env } from "./env";
 import { decodeForensicCopy, parseFileInfo, resolveFiles, sha256Hex, type DecodedCopy, type FileInfoEntry } from "./forensic_files";
 import { parseTimeMs } from "./decode";
+import { authorize, fileDownload, json } from "./http_util";
 
 /**
  * Step 1 of forensic file tracking (see docs/forensic-file-tracking.md):
@@ -20,27 +21,6 @@ function str(v: unknown): string | null {
 
 function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length > 0) : [];
-}
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body, null, 2), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-  });
-}
-
-/** These endpoints return real uploaded file contents, so unlike /run they
- * refuse to run at all without LOOKUP_TOKEN configured. Bearer header, not
- * a query param, so the token doesn't end up in access logs. */
-async function authorized(request: Request, env: Env): Promise<Response | null> {
-  if (!env.LOOKUP_TOKEN) return json({ error: "LOOKUP_TOKEN is not configured" }, 503);
-  const given = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
-  const a = new TextEncoder().encode(given);
-  const b = new TextEncoder().encode(env.LOOKUP_TOKEN);
-  if (a.byteLength !== b.byteLength || !crypto.subtle.timingSafeEqual(a, b)) {
-    return json({ error: "Unauthorized" }, 401);
-  }
-  return null;
 }
 
 /** YYYYMMDD strings to scan: the given UTC day and the next one (requests
@@ -234,12 +214,6 @@ async function handleLookup(url: URL, env: Env): Promise<Response> {
   });
 }
 
-/** RFC 6266 filename + filename* so non-ASCII (e.g. Korean) names survive. */
-function attachmentDisposition(name: string): string {
-  const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
-}
-
 /** GET /forensic/file?request_id=<id>&sha256=<hex>[&date=YYYY-MM-DD]
  * Re-extracts the file from the forensic copy and returns its bytes. Always
  * served as an octet-stream download, never inline -- the content is
@@ -259,16 +233,7 @@ async function handleFile(url: URL, env: Env): Promise<Response> {
       if ((await sha256Hex(f.bytes)) !== wanted) continue;
       const [resolved] = await resolveFiles([f], http?.fileInfo ?? [], []);
       const name = resolved?.fileName ?? `${wanted}.bin`;
-      return new Response(f.bytes, {
-        headers: {
-          "content-type": "application/octet-stream",
-          "content-disposition": attachmentDisposition(name),
-          "x-content-type-options": "nosniff",
-          "cache-control": "no-store",
-          "x-file-sha256": wanted,
-          "x-file-truncated": String(f.truncated),
-        },
-      });
+      return fileDownload(f.bytes, name, { "x-file-sha256": wanted, "x-file-truncated": String(f.truncated) });
     }
   }
   return json({ error: "file not found for that request_id/sha256" }, 404);
@@ -280,7 +245,7 @@ export async function handleForensicRoutes(request: Request, env: Env): Promise<
   if (!url.pathname.startsWith("/forensic/")) return null;
   if (request.method !== "GET") return json({ error: "Method not allowed" }, 405);
 
-  const denied = await authorized(request, env);
+  const denied = authorize(request, env);
   if (denied) return denied;
 
   if (url.pathname === "/forensic/lookup") return handleLookup(url, env);

@@ -2,6 +2,17 @@ export interface Env {
   /** R2 bucket both Logpush jobs write into, under separate prefixes. */
   LOGS_BUCKET: R2Bucket;
 
+  /** D1 database holding http_requests / forensic_files (see schema.ts). */
+  DB: D1Database;
+
+  /** R2 key prefix the ingester writes extracted file bytes under, e.g.
+   * "files/". Must not overlap either Logpush prefix. */
+  FILES_PREFIX?: string;
+  /** Max new R2 objects ingested per prefix per run. */
+  MAX_OBJECTS_PER_RUN?: string;
+  /** How many UTC date folders (today and back) each run looks at. */
+  LOOKBACK_DAYS?: string;
+
   /** R2 key prefix of the gateway_http Logpush job, e.g. "http/". */
   HTTP_LOG_PREFIX?: string;
   /** R2 key prefix of the DLP forensic copies Logpush job, e.g.

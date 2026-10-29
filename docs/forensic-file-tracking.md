@@ -22,7 +22,7 @@ Logpush ─┬─ dlp_forensic_copies ──▶ R2 forensic/   (Payload = base64
 
 ---
 
-## 1단계 — 추출 · 디코딩 · 해시로 파일명 조회 (현재 단계)
+## 1단계 — 추출 · 디코딩 · 해시로 파일명 조회 (완료)
 
 ### 입력
 - R2 `forensic/` 아래 Forensic Copy NDJSON(.gz)
@@ -68,15 +68,31 @@ Logpush ─┬─ dlp_forensic_copies ──▶ R2 forensic/   (Payload = base64
 
 ---
 
-## 2단계 — SQL 정리 (D1)
+## 2단계 — D1 적재 + 조회 (완료)
 
-- cron 적재 시 1단계 로직을 그대로 태워 D1에 행 단위로 저장
-  - `forensic_files`(copy_id, request_id, ts, file_name, matched_by, sha256, size,
-    content_type, r2_key, truncated)
-  - `http_requests`(request_id, ts, email, src_ip, dst_ip, host, url, method, action,
-    policy, file_info JSON)
-- 복원 파일은 R2 `forensic-files/{request_id}/{sha256}`에 저장 (원본 오브젝트는 수정 금지)
-- 기본 쿼리: 기간/사용자/목적지/파일명/해시 검색, 시간순 정렬
+### 조회 대상 항목
+| 항목 | 출처 |
+|---|---|
+| Email | `gateway_http.Email` |
+| Device name | `gateway_http.DeviceName` |
+| Time | Forensic copy `Datetime` |
+| Host | `gateway_http.HTTPHost` |
+| Application name | `gateway_http.ApplicationNames` (배열 → 쉼표로 이어 붙임) |
+| File name | `FileInfo` 해시 일치 → multipart `filename=` → `UploadedFileNames` 순 |
+
+### 구현
+- cron(1분)이 R2의 새 Logpush 오브젝트를 읽어 D1에 저장 (`src/ingest.ts`)
+  - `http_requests`: POST/PUT/PATCH 또는 파일 필드가 있는 요청만 저장 (나머지 트래픽은 파싱도 안 함)
+  - `forensic_files`: 추출 파일 1개당 1행, SHA-256/SHA-1/MD5 모두 저장 (`FileInfo.file_hash` 알고리즘 미확정 대비)
+  - 파일 원본은 R2 `files/{request_id}/{sha256}` (Logpush 원본 오브젝트는 수정하지 않음)
+  - `ingested_objects`로 중복 처리 방지, 모든 쓰기는 upsert라 실패 시 다음 실행에서 재처리
+- 두 데이터셋은 **조회 시점에 조인** (`file_transfers` 뷰) — HTTP 로그가 늦게 도착해도 자동 반영
+- 테이블은 Worker가 직접 생성 (`src/schema.ts`) — 버튼 배포/자동 생성된 D1에서도 마이그레이션 불필요
+- API: `/api/transfers`(필터: from, to, email, device, host, app, file), `/api/files/…`, `/api/status`, `POST /api/ingest`
+
+### 범위 밖 (필요 시 추가)
+- 다운로드(response phase) 파일, 파일이 아닌 forensic copy(프롬프트 등)는 D1에 저장하지 않음 — `/forensic/lookup`으로는 조회 가능
+- 보존 기간 정리(오래된 행/파일 삭제)
 
 ## 3단계 — 대시보드
 

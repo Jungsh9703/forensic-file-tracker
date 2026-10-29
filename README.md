@@ -15,9 +15,22 @@ Zero Trust Gateway (HTTP 정책: Forensic copy)
                                       ▼
                      Worker  forensic-file-tracker
                      [1단계] 디코딩 → 파일 추출 → SHA-256 → RequestID 조인 → 파일명 확정  ✅
-                     [2단계] D1 적재 + SQL 조회                                          ⏳
+                     [2단계] cron(1분) → D1 적재 + /api/transfers 조회                   ✅
                      [3단계] Worker가 띄우는 대시보드                                    ⏳
 ```
+
+### D1 구조 (2단계)
+
+두 Logpush 데이터는 도착 순서가 보장되지 않아 **각각 그대로 저장하고, 조회할 때 합칩니다** —
+HTTP 로그가 늦게 와도 다음 조회부터 자동으로 채워집니다. 테이블은 Worker가 처음 실행될 때
+직접 만듭니다(`src/schema.ts`, 별도 마이그레이션 불필요).
+
+| 테이블/뷰 | 내용 |
+|---|---|
+| `http_requests` | `gateway_http` 중 파일 업로드 가능성이 있는 요청만 (POST/PUT/PATCH 또는 파일 필드가 있는 것) — Email, DeviceName, Host, ApplicationNames, FileInfo 등 |
+| `forensic_files` | Forensic copy에서 추출한 파일 1개당 1행 — 시간, RequestID, 크기, SHA-256/SHA-1/MD5. 파일 원본은 R2 `files/`에 저장 |
+| `ingested_objects` | 처리 완료한 R2 오브젝트 (중복 처리 방지) |
+| **`file_transfers`** (뷰) | 위 두 테이블 조인: **time, email, device_name, host, application_name, file_name** + matched_by, sha256, url 등 |
 
 단계별 요구사항은 [`docs/forensic-file-tracking.md`](docs/forensic-file-tracking.md) 참고.
 
@@ -58,6 +71,31 @@ npm run deploy
 
 모든 요청에 `Authorization: Bearer <LOOKUP_TOKEN>` 헤더가 필요합니다.
 
+### 파일 전송 조회 (D1, 2단계)
+
+- `GET /api/transfers` — 최신순 목록. 필터(모두 선택, 텍스트는 대소문자 무시 "포함" 검색):
+  `from` / `to` (`YYYY-MM-DD` 또는 ISO 시각, 날짜만 주면 그날 하루 포함), `email`, `device`,
+  `host`, `app`, `file`, `limit`(기본 100, 최대 1000), `offset`
+  ```bash
+  curl -H "Authorization: Bearer $TOKEN" "https://<worker>.workers.dev/api/transfers?from=2026-10-29&email=user1"
+  ```
+  각 항목: `time, email, deviceName, host, applicationName, fileName` + `matchedBy`, `size`,
+  `sha256`, `requestId`, `url`, `method`, `action`, `policyName`, `sourceIP`, `destinationIP`,
+  `httpMatched`(HTTP 로그 도착 여부), `downloadPath`
+- `GET /api/files/<request_id>/<sha256>` — 원본 파일 다운로드
+- `GET /api/status` — 데이터가 쌓이고 있는지: 행 수, 마지막 수신 시각, 최근 처리한 R2 오브젝트
+- `POST /api/ingest` — cron을 기다리지 않고 바로 적재
+
+SQL로 직접 보려면 Cloudflare 대시보드 → **Storage & Databases → D1 → forensic-file-tracker →
+Console**에서:
+
+```sql
+SELECT time, email, device_name, host, application_name, file_name
+FROM file_transfers ORDER BY ts DESC LIMIT 50;
+```
+
+### R2 직접 조회 (1단계, 요청 1건 디버깅용)
+
 - `GET /forensic/lookup?request_id=<GatewayRequestID>[&date=YYYY-MM-DD]`
   - Forensic copy의 `Datetime`, `GatewayRequestID`, `Headers`, 디코딩된 `Payload`
   - 업로드 파일 목록: 파일명, `matchedBy`(`hash` → `multipart` → `uploaded_file_names` 순),
@@ -79,11 +117,13 @@ npx wrangler dev --var LOOKUP_TOKEN:local-test-token
 
 ```bash
 npm run seed:local
-curl -H "Authorization: Bearer local-test-token" "http://127.0.0.1:8787/forensic/lookup?request_id=req-upload-0001"
+curl -X POST -H "Authorization: Bearer local-test-token" http://127.0.0.1:8787/api/ingest
+curl -H "Authorization: Bearer local-test-token" http://127.0.0.1:8787/api/transfers
 ```
 
-`files[0].fileName`이 `고객명단_2026.csv`, `matchedBy`가 `hash`면 정상입니다 (multipart 파트 이름은
-`blob`이라, 파일명은 해시 매칭으로만 알 수 있게 만든 샘플).
+`fileName`이 `고객명단_2026.csv`, `matchedBy`가 `hash`, `deviceName`이 `LAPTOP-SH01`이면
+정상입니다 (multipart 파트 이름은 `blob`이라, 파일명은 해시 매칭으로만 알 수 있게 만든 샘플).
+`wrangler dev`를 `--persist-to <dir>`로 띄웠다면 시드도 `WRANGLER_PERSIST_TO=<dir> npm run seed:local`.
 
 ## 주의
 

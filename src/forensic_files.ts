@@ -231,7 +231,7 @@ export function parseFileInfo(v: unknown): FileInfoEntry[] {
     }));
 }
 
-async function digestHex(algo: string, bytes: Uint8Array): Promise<string> {
+export async function digestHex(algo: string, bytes: Uint8Array): Promise<string> {
   const buf = await crypto.subtle.digest(algo, bytes);
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }

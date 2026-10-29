@@ -21,7 +21,9 @@ function putObject(key, lines) {
   const outPath = `scripts/.tmp/${key.replace(/\//g, "_")}`;
   writeFileSync(outPath, gz);
   console.log(`Writing ${key} ...`);
-  execSync(`npx wrangler r2 object put ${BUCKET}/${key} --file="${outPath}" --local`, { stdio: "inherit" });
+  // Match `wrangler dev --persist-to <dir>` if the dev server was started with one.
+  const persist = process.env.WRANGLER_PERSIST_TO ? ` --persist-to="${process.env.WRANGLER_PERSIST_TO}"` : "";
+  execSync(`npx wrangler r2 object put ${BUCKET}/${key} --file="${outPath}" --local${persist}`, { stdio: "inherit" });
 }
 
 // --- 1. File upload: the browser names the multipart part "blob" (common
@@ -50,6 +52,8 @@ const httpLines = [
     Datetime: iso(5000),
     RequestID: uploadRequestId,
     Email: "user1@example.com",
+    DeviceName: "LAPTOP-SH01",
+    ApplicationNames: ["Example Storage"],
     SourceIP: "203.0.113.10",
     DestinationIP: "198.51.100.20",
     HTTPHost: "upload.storage.example",
@@ -76,6 +80,8 @@ const httpLines = [
     Datetime: iso(4000),
     RequestID: promptRequestId,
     Email: "user2@example.com",
+    DeviceName: "DESKTOP-KR02",
+    ApplicationNames: ["Example Chat"],
     SourceIP: "203.0.113.11",
     DestinationIP: "198.51.100.30",
     HTTPHost: "chat.example",
