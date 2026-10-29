@@ -1,5 +1,4 @@
-import { decodeBase64, decompress, headerValue } from "./forensic";
-import { parseTimeMs } from "./normalize";
+import { decodeBase64, decompress, headerValue, parseTimeMs } from "./decode";
 
 /** One entry of gateway_http's FileInfo.files[]. Cloudflare's field
  * reference only says FileInfo is an "object" -- these keys come from a

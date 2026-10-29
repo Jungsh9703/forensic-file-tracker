@@ -1,5 +1,7 @@
 # Forensic Copy 기반 파일 전송 추적 — 요구사항 / 단계 계획
 
+> 구성 원칙: 외부 클라우드/도구 없이 **Cloudflare R2 + D1 + Workers만** 사용합니다.
+
 DLP Forensic Copies(`dlp_forensic_copies`)와 Gateway HTTP 로그(`gateway_http`)를
 `GatewayRequestID` = `RequestID`로 이어 붙여, **누가 · 언제 · 어디로 · 어떤 파일을**
 보냈는지와 그 **원본 파일**까지 확인할 수 있게 만드는 작업입니다. 세 단계로 나눠
@@ -79,5 +81,5 @@ Logpush ─┬─ dlp_forensic_copies ──▶ R2 forensic/   (Payload = base64
 ## 3단계 — 대시보드
 
 - 발신(사용자) · 수신(목적지 Host/URL) · 시간 · 전송 경로 · 파일명 · 해시 · 원본 열람 링크
-- Worker가 제공하는 페이지 + Cloudflare Access 보호 (또는 기존 Grafana에 연결)
+- Worker가 직접 제공하는 페이지(외부 대시보드 도구 없음) + Cloudflare Access 보호
 - 이상 징후 알림(대용량, 특정 확장자, 비업무 도메인 등)은 이 단계 이후 검토

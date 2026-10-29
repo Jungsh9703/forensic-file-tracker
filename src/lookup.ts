@@ -1,7 +1,6 @@
 import type { Env } from "./env";
-import { loadConfig } from "./config";
 import { decodeForensicCopy, parseFileInfo, resolveFiles, sha256Hex, type DecodedCopy, type FileInfoEntry } from "./forensic_files";
-import { parseTimeMs } from "./normalize";
+import { parseTimeMs } from "./decode";
 
 /**
  * Step 1 of forensic file tracking (see docs/forensic-file-tracking.md):
@@ -73,7 +72,7 @@ async function listKeys(env: Env, prefix: string, dates: string[], budget: ScanB
     const keys: string[] = [];
     let cursor: string | undefined;
     do {
-      const page = await env.RAW_LOGS_BUCKET.list({ prefix: p, cursor, limit: 1000 });
+      const page = await env.LOGS_BUCKET.list({ prefix: p, cursor, limit: 1000 });
       keys.push(...page.objects.map((o) => o.key));
       cursor = page.truncated ? page.cursor : undefined;
     } while (cursor && keys.length < budget.remaining);
@@ -101,7 +100,7 @@ async function scanPrefix(
   const found: Record<string, unknown>[] = [];
   for (const key of await listKeys(env, prefix, dates, budget)) {
     if (budget.remaining <= 0) break;
-    const obj = await env.RAW_LOGS_BUCKET.get(key);
+    const obj = await env.LOGS_BUCKET.get(key);
     if (!obj) continue;
     budget.remaining--;
     budget.scanned++;
@@ -164,17 +163,18 @@ interface Found {
 }
 
 async function findRequest(env: Env, requestId: string, dates: string[], withHttp: boolean): Promise<Found> {
-  const cfg = loadConfig(env);
+  const forensicPrefix = env.FORENSIC_LOG_PREFIX ?? "forensic/";
+  const httpPrefix = env.HTTP_LOG_PREFIX ?? "http/";
   const max = Number(env.MAX_LOOKUP_OBJECTS ?? DEFAULT_MAX_LOOKUP_OBJECTS);
 
   const fBudget: ScanBudget = { remaining: max, scanned: 0 };
-  const rawCopies = await scanPrefix(env, cfg.forensicPrefix, dates, requestId, (r) => r.GatewayRequestID === requestId, fBudget, false);
+  const rawCopies = await scanPrefix(env, forensicPrefix, dates, requestId, (r) => r.GatewayRequestID === requestId, fBudget, false);
   const copies = rawCopies.map(decodeForensicCopy).sort((a, b) => a.timestampMs - b.timestampMs);
 
   let http: HttpSummary | null = null;
   const hBudget: ScanBudget = { remaining: max, scanned: 0 };
   if (withHttp) {
-    const rawHttp = await scanPrefix(env, cfg.httpPrefix, dates, requestId, (r) => r.RequestID === requestId, hBudget, true);
+    const rawHttp = await scanPrefix(env, httpPrefix, dates, requestId, (r) => r.RequestID === requestId, hBudget, true);
     http = rawHttp[0] ? summarizeHttp(rawHttp[0]) : null;
   }
 

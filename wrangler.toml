@@ -1,130 +1,28 @@
-name = "gateway-log-pipeline"
+name = "forensic-file-tracker"
 main = "src/index.ts"
 compatibility_date = "2025-04-01"
-# Needed for `node:zlib` (gunzipSync/inflateSync/brotliDecompressSync) in
-# src/forensic.ts, used to decode DLP Forensic Copies' Payload field. Not
-# related to HPKE decryption (crypto.ts) -- forensic copies aren't encrypted
-# at all, just base64 (+ optionally gzip/deflate/brotli), see forensic.ts.
+# Needed for `node:zlib` (gunzip/inflate/brotli) in src/decode.ts, used to
+# decompress forensic copy Payloads whose Headers carry Content-Encoding.
 compatibility_flags = ["nodejs_compat"]
 
-# Designed to run on the Workers Free plan. Keep the default ("bundled")
-# usage model and the per-run budgets below inside the free tier's CPU limit.
-# Note: this ships EVERY gateway_http log line (no error filter), so volume
-# -- and therefore Loki/Azure Blob storage growth -- can be high. Tune
-# MAX_OBJECTS_PER_RUN / MAX_LINES_PER_OBJECT_RUN down if a single cron run
-# is taking too long or Loki push requests are timing out.
+# Cloudflare only: Logpush -> R2 -> Workers (step 1), + D1 (step 2) and a
+# Worker-served dashboard (step 3). See docs/forensic-file-tracking.md.
 
 # --- R2 bucket that receives BOTH Logpush jobs, under separate prefixes ---
-# Create it first: `wrangler r2 bucket create gateway-log-raw`
-# Then create two Logpush jobs pointed at this same bucket:
-#   1. dataset "gateway_http" (Select All fields) -> destination prefix
-#      matching HTTP_LOG_PREFIX below (default "http/")
-#   2. dataset "DLP forensic copies" -> destination prefix matching
-#      FORENSIC_LOG_PREFIX below (default "forensic/")
-# Cloudflare partitions each job's objects by date under whatever prefix you
-# give it, so this naturally produces e.g. "http/<date>/..." and
-# "forensic/<date>/..." inside the one bucket -- see README for exact
-# destination string format.
+#   1. dataset "gateway_http"        -> prefix HTTP_LOG_PREFIX     ("http/")
+#   2. dataset "DLP forensic copies" -> prefix FORENSIC_LOG_PREFIX ("forensic/")
 [[r2_buckets]]
-binding = "RAW_LOGS_BUCKET"
+binding = "LOGS_BUCKET"
 bucket_name = "sh-logpush-test"
 
-# --- Durable Object tracking per-object ingestion cursors + a rolling set
-# of fully-processed object keys, so a cron run can resume large objects
-# across invocations without reprocessing completed ones. A single global
-# instance backs the whole pipeline (see src/cursor.ts). Uses SQLite-backed
-# storage, which runs on the Workers Free plan (unlike the older
-# durable-object storage backend, which required a paid plan). Chosen over
-# Workers KV because KV is only eventually consistent (writes can take up to
-# ~60s to reach every edge location) -- with a 1-minute cron, a KV read
-# could see stale cursor data from the previous run; Durable Object storage
-# is strongly consistent, so this can't happen. No separate resource to
-# create -- the class is defined in src/cursor_do.ts and provisioned by the
-# migration below on first deploy.
-[[durable_objects.bindings]]
-name = "CURSOR_DO"
-class_name = "IngestCursor"
-
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["IngestCursor"]
-
-# --- Periodic ingestion: drains new Logpush objects from R2 and pushes
-# every record to Loki (running on the Azure VM, storing its chunks/index
-# in Azure Blob Storage). Every 1 minute -- safe now that cursor state is
-# strongly consistent (see above); with KV this would have risked duplicate
-# processing from stale reads.
-[triggers]
-crons = ["*/1 * * * *"]
-
 [vars]
-# Upper bounds per scheduled run. The real constraint in practice is
-# MAX_OBJECTS_PER_RUN, not MAX_LINES_PER_OBJECT_RUN: Logpush tends to write
-# many small objects rather than few large ones, and most of runIngestion's
-# time is spent awaiting I/O (R2 reads, Durable Object calls) -- which does
-# NOT count against the Workers CPU time limit, only actual JS execution
-# does. So raising MAX_OBJECTS_PER_RUN mainly costs wall time, not CPU
-# budget. Watch the Worker's Metrics tab for "Exceeded CPU Time" after
-# changing this -- if it stays at 0 you're still safely inside the Free
-# plan's budget; lower it back down if it isn't.
-MAX_OBJECTS_PER_RUN = "30"
-MAX_LINES_PER_OBJECT_RUN = "2000"
-COMPLETED_SET_CAP = "3000"
-# Cap on HPKE decrypt operations (GenAI prompt capture + DLP matched-data
-# context) per run -- each is a real ECDH + AEAD op. Only matters if
-# DLP_PRIVATE_KEY is set below.
-MAX_DECRYPTIONS_PER_RUN = "20"
+HTTP_LOG_PREFIX = "http/"
+FORENSIC_LOG_PREFIX = "forensic/"
 
-# R2 key prefixes distinguishing the two Logpush jobs sharing this one
-# bucket -- must match each job's destination prefix exactly (see the
-# [[r2_buckets]] comment above).
 # Cap on R2 objects scanned per prefix for one GET /forensic/lookup call
 # (src/lookup.ts). Lookups scan R2 directly by date until step 2 (D1) lands,
 # so this bounds a single request's wall time on busy days.
 MAX_LOOKUP_OBJECTS = "200"
 
-HTTP_LOG_PREFIX = "http/"
-FORENSIC_LOG_PREFIX = "forensic/"
-
-# Loki push API endpoint on the Azure VM (see ../loki-grafana-azure-vm).
-# IMPORTANT: must be a hostname, NOT a bare IP address -- Cloudflare Workers'
-# fetch() routes IP-literal URLs through Cloudflare's edge, which can't map
-# them to a zone and returns its own "error code: 1003" instead of ever
-# reaching the VM. With no real domain available, use nip.io (a public
-# wildcard DNS service that resolves "<ip-with-dots>.nip.io" straight back
-# to that IP -- nginx doesn't check the Host header, so this needs no VM
-# config): "http://<vm-public-ip>.nip.io:3100/loki/api/v1/push". Plain http,
-# not https (no domain means no real TLS cert), and the :3100 port is
-# required (that's where nginx's Basic-Auth-protected proxy listens, not
-# the default 443).
-LOKI_URL = "http://<vm-public-ip>.nip.io:3100/loki/api/v1/push"
-
-# Not sensitive (just an identifier, like a username on a login form) --
-# left as a plain var rather than a secret so it isn't masked for no reason
-# in the Cloudflare dashboard / deploy-button UI. Set to whatever user you
-# created with `htpasswd` on the VM (see ../loki-grafana-azure-vm/README.md).
-LOKI_USERNAME = "loki-pusher"
-
-# Not sensitive (visible in the dashboard URL) -- paired with the
-# CF_API_TOKEN secret below. Needed in practice: PolicyName does NOT always
-# arrive populated in the real Logpush data (e.g. "bypass" traffic under a
-# system policy like "Do Not Inspect" often omits it, along with several
-# other HTTP-specific fields) -- confirmed against real gateway_http
-# records, not just an assumption. When it's missing, this resolves rule_id
-# via the Cloudflare API instead of showing the raw UUID.
-CF_ACCOUNT_ID = ""
-
 # --- Secrets (do NOT put these in this file) ---
-# wrangler secret put LOKI_API_KEY              # the htpasswd password paired with LOKI_USERNAME above
-# wrangler secret put LOOKUP_TOKEN              # Bearer token for GET /forensic/lookup + /forensic/file -- returns real uploaded file contents, so those endpoints refuse to run without it
-# wrangler secret put CF_API_TOKEN             # API token with Account > Zero Trust > Read, paired with CF_ACCOUNT_ID above
-# wrangler secret put DLP_PRIVATE_KEY           # base64 DLP Payload Encryption private key (Zero Trust > Settings > DLP) -- decrypts GenAI prompt capture + DLP matched-data context, if that data ever shows up via Logpush (see README)
-
-# --- Not needed for the current setup (nginx Basic Auth, no domain) --
-# omitted so neither the deploy-button screen nor a plain `wrangler deploy`
-# treats them as required. Add back later if needed, no code changes
-# required:
-#   `wrangler secret put CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`
-#     -- only if a domain + Cloudflare Tunnel + Access fronts Loki instead
-#   `wrangler secret put RUN_TOKEN`
-#     -- requires a token on the manual POST /run test endpoint
+# wrangler secret put LOOKUP_TOKEN   # Bearer token for /forensic/lookup + /forensic/file -- returns real uploaded file contents, so those endpoints refuse to run without it
