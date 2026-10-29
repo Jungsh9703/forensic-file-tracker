@@ -59,48 +59,73 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_ingested_at ON ingested_objects (ingested_at)`,
 
-  // Filename precedence matches resolveFiles() in forensic_files.ts: the
-  // FileInfo entry whose file_hash equals one of the file's own digests
-  // (algorithm unknown, so all three are compared), then the multipart
-  // filename, then UploadedFileNames by position.
-  `CREATE VIEW IF NOT EXISTS file_transfers AS
-  SELECT
-    f.ts,
-    strftime('%Y-%m-%dT%H:%M:%fZ', f.ts / 1000.0, 'unixepoch') AS time,
-    h.email,
-    h.device_name,
-    h.host,
-    (SELECT group_concat(a.value, ', ') FROM json_each(COALESCE(h.application_names, '[]')) a) AS application_name,
-    COALESCE(
-      (SELECT json_extract(j.value, '$.fileName') FROM json_each(COALESCE(h.file_info, '[]')) j
-        WHERE lower(json_extract(j.value, '$.fileHash')) IN (f.sha256, f.sha1, f.md5) LIMIT 1),
-      f.part_file_name,
-      json_extract(h.uploaded_file_names, '$[' || f.file_index || ']')
-    ) AS file_name,
-    CASE
-      WHEN EXISTS (SELECT 1 FROM json_each(COALESCE(h.file_info, '[]')) j
-        WHERE lower(json_extract(j.value, '$.fileHash')) IN (f.sha256, f.sha1, f.md5)) THEN 'hash'
-      WHEN f.part_file_name IS NOT NULL THEN 'multipart'
-      WHEN json_extract(h.uploaded_file_names, '$[' || f.file_index || ']') IS NOT NULL THEN 'uploaded_file_names'
-      ELSE 'none'
-    END AS matched_by,
-    f.size,
-    f.sha256,
-    f.truncated,
-    f.content_type,
-    f.request_id,
-    f.forensic_copy_id,
-    f.r2_key,
-    h.url,
-    h.method,
-    h.action,
-    h.policy_name,
-    h.source_ip,
-    h.destination_ip,
-    h.request_id IS NOT NULL AS http_matched
-  FROM forensic_files f
-  LEFT JOIN http_requests h ON h.request_id = f.request_id`,
+  // Dropped and recreated (not IF NOT EXISTS) so a deploy that changes the
+  // view's definition takes effect -- views hold no data. D1 runs a batch as
+  // one transaction, so readers never see it missing.
+  `DROP VIEW IF EXISTS file_transfers`,
+  FILE_TRANSFERS_VIEW(),
 ];
+
+/** SQL twin of isRealFileName() in forensic_files.ts: Gateway's own
+ * placeholder ("<unknown file name>") and generic browser part names
+ * ("blob") don't count as a filename, so the next source gets a turn. */
+function realName(x: string): string {
+  return `(${x} IS NOT NULL AND trim(${x}) <> '' AND ${x} NOT LIKE '<%>' AND lower(${x}) <> 'blob')`;
+}
+
+/**
+ * Filename precedence matches resolveFiles() in forensic_files.ts: the
+ * FileInfo entry whose file_hash equals one of the file's own digests
+ * (algorithm unknown, so all three are compared), then the multipart
+ * filename, then UploadedFileNames by position -- each only if it's a real
+ * name. hash_verified records the hash match on its own, since FileInfo can
+ * match by hash yet carry only a placeholder name.
+ */
+function FILE_TRANSFERS_VIEW(): string {
+  const hashMatch = `lower(json_extract(j.value, '$.fileHash')) IN (f.sha256, f.sha1, f.md5)`;
+  const infoName = `json_extract(j.value, '$.fileName')`;
+  return `CREATE VIEW file_transfers AS
+  SELECT
+    c.*,
+    COALESCE(c.name_from_hash, c.name_from_part, c.name_from_upload) AS file_name,
+    CASE
+      WHEN c.name_from_hash IS NOT NULL THEN 'hash'
+      WHEN c.name_from_part IS NOT NULL THEN 'multipart'
+      WHEN c.name_from_upload IS NOT NULL THEN 'uploaded_file_names'
+      ELSE 'none'
+    END AS matched_by
+  FROM (
+    SELECT
+      f.ts,
+      strftime('%Y-%m-%dT%H:%M:%fZ', f.ts / 1000.0, 'unixepoch') AS time,
+      h.email,
+      h.device_name,
+      h.host,
+      (SELECT group_concat(a.value, ', ') FROM json_each(COALESCE(h.application_names, '[]')) a) AS application_name,
+      (SELECT ${infoName} FROM json_each(COALESCE(h.file_info, '[]')) j
+        WHERE ${hashMatch} AND ${realName(infoName)} LIMIT 1) AS name_from_hash,
+      CASE WHEN ${realName("f.part_file_name")} THEN f.part_file_name END AS name_from_part,
+      (SELECT u.value FROM json_each(COALESCE(h.uploaded_file_names, '[]')) u
+        WHERE u.key = f.file_index AND ${realName("u.value")}) AS name_from_upload,
+      EXISTS (SELECT 1 FROM json_each(COALESCE(h.file_info, '[]')) j WHERE ${hashMatch}) AS hash_verified,
+      f.size,
+      f.sha256,
+      f.truncated,
+      f.content_type,
+      f.request_id,
+      f.forensic_copy_id,
+      f.r2_key,
+      h.url,
+      h.method,
+      h.action,
+      h.policy_name,
+      h.source_ip,
+      h.destination_ip,
+      h.request_id IS NOT NULL AS http_matched
+    FROM forensic_files f
+    LEFT JOIN http_requests h ON h.request_id = f.request_id
+  ) c`;
+}
 
 let schemaReady = false;
 

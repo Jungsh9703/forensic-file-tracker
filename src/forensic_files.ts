@@ -29,6 +29,9 @@ export interface ResolvedFile {
   fileName: string | null;
   /** Which evidence fileName came from, strongest first. */
   matchedBy: "hash" | "multipart" | "uploaded_file_names" | "none";
+  /** A FileInfo entry's hash equals this file's digest -- true even when that
+   * entry only had a placeholder name and fileName came from elsewhere. */
+  hashVerified: boolean;
   sha256: string;
   size: number;
   contentType: string | null;
@@ -240,6 +243,16 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return digestHex("SHA-256", bytes);
 }
 
+/** Gateway fills FileInfo.file_name with a placeholder ("<unknown file
+ * name>") when it couldn't tell, and browsers often name JS-built multipart
+ * parts just "blob" -- neither is a filename, so resolution falls through to
+ * the next source. Keep in sync with realName() in schema.ts. */
+export function isRealFileName(n: string | null | undefined): n is string {
+  if (!n || n.trim() === "") return false;
+  if (/^<.*>$/.test(n)) return false;
+  return n.toLowerCase() !== "blob";
+}
+
 /** FileInfo.file_hash's algorithm isn't documented -- infer it from length
  * and compute the matching digest (Workers' WebCrypto supports MD5 too). */
 const ALGO_BY_HEX_LENGTH: Record<number, string> = { 64: "SHA-256", 40: "SHA-1", 32: "MD5" };
@@ -274,13 +287,13 @@ export async function resolveFiles(
 
     let fileName: string | null = null;
     let matchedBy: ResolvedFile["matchedBy"] = "none";
-    if (match?.fileName) {
-      fileName = match.fileName;
+    if (isRealFileName(match?.fileName)) {
+      fileName = match!.fileName;
       matchedBy = "hash";
-    } else if (f.partFileName) {
+    } else if (isRealFileName(f.partFileName)) {
       fileName = f.partFileName;
       matchedBy = "multipart";
-    } else if (uploadedFileNames[idx]) {
+    } else if (isRealFileName(uploadedFileNames[idx])) {
       fileName = uploadedFileNames[idx]!;
       matchedBy = "uploaded_file_names";
     }
@@ -288,6 +301,7 @@ export async function resolveFiles(
     out.push({
       fileName,
       matchedBy,
+      hashVerified: match !== null,
       sha256,
       size: f.bytes.length,
       contentType: f.contentType,

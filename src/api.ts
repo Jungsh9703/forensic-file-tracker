@@ -24,6 +24,7 @@ interface TransferRow {
   application_name: string | null;
   file_name: string | null;
   matched_by: string;
+  hash_verified: number;
   size: number;
   sha256: string;
   truncated: number;
@@ -115,6 +116,7 @@ async function handleTransfers(url: URL, env: Env): Promise<Response> {
     applicationName: r.application_name,
     fileName: r.file_name,
     matchedBy: r.matched_by,
+    hashVerified: r.hash_verified === 1,
     size: r.size,
     sha256: r.sha256,
     truncated: r.truncated === 1,

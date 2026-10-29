@@ -393,7 +393,9 @@
   }
 
   // ---- table ----
-  const MATCHED = { hash: "해시 일치", multipart: "업로드 이름", uploaded_file_names: "HTTP 로그", none: "알 수 없음" };
+  // Where the filename came from; hash verification is shown separately,
+  // since Gateway can match a file by hash yet only know a placeholder name.
+  const MATCHED = { hash: "FileInfo", multipart: "업로드 이름", uploaded_file_names: "UploadedFileNames", none: "이름 없음" };
   async function download(item, btn) {
     btn.disabled = true;
     try {
@@ -417,13 +419,18 @@
     for (const it of data.items) {
       const btn = el("button", { type: "button", text: "다운로드", "aria-label": `${it.fileName || it.sha256} 다운로드` });
       btn.addEventListener("click", () => download(it, btn));
-      const tag = el("span", { class: "tag", title: it.truncated ? "Forensic copy가 잘려 원본과 다를 수 있음" : "", text: (MATCHED[it.matchedBy] || it.matchedBy) + (it.truncated ? " · 잘림" : "") });
+      const tags = el("td", { class: "nowrap" }, el("span", { class: "tag", text: MATCHED[it.matchedBy] || it.matchedBy }));
+      if (it.hashVerified) tags.append(" ", el("span", { class: "tag", title: "Gateway가 기록한 파일 해시와 추출한 파일의 해시가 같음", text: "해시 ✓" }));
+      if (it.truncated) tags.append(" ", el("span", { class: "tag", title: "Forensic copy가 잘려 원본과 다를 수 있음", text: "잘림" }));
+      const fileCell = it.fileName
+        ? el("td", { class: "file", title: `sha256 ${it.sha256}`, text: it.fileName })
+        : el("td", { class: "file null", title: `sha256 ${it.sha256}`, text: "(이름 없음)" });
       tbody.append(el("tr", {},
         el("td", { class: "time", title: it.time, text: dtf.format(new Date(it.time)) }),
         cell(it.email), cell(it.deviceName, "nowrap"), cell(it.host), cell(it.applicationName),
-        el("td", { class: "file", title: `sha256 ${it.sha256}` }, it.fileName || "—"),
+        fileCell,
         el("td", { class: "num", text: bytes(it.size) }),
-        el("td", {}, tag),
+        tags,
         el("td", {}, btn),
       ));
     }
