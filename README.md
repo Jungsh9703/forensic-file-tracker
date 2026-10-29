@@ -1,5 +1,7 @@
 # Forensic File Tracker
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Jungsh9703/forensic-file-tracker)
+
 Cloudflare Zero Trust Gateway의 **DLP Forensic Copies**와 **Gateway HTTP 로그**를 이어 붙여
 누가 · 언제 · 어디로 · 어떤 파일을 보냈는지와 그 **원본 파일**을 확인하는 Worker입니다.
 외부 클라우드 없이 **Cloudflare R2 + D1 + Workers**만 사용합니다.
@@ -31,6 +33,19 @@ Zero Trust Gateway (HTTP 정책: Forensic copy)
 prefix는 `wrangler.toml`의 `FORENSIC_LOG_PREFIX` / `HTTP_LOG_PREFIX`와 같아야 합니다.
 
 ## 2. 배포
+
+### 방법 A — Deploy to Cloudflare 버튼
+
+맨 위 버튼을 누르면 Cloudflare가 이 저장소를 **내 GitHub 계정으로 복제**한 뒤 Worker를 만들고
+배포합니다. 이후 그 복제된 저장소에 push할 때마다 자동으로 다시 배포됩니다.
+
+설정 화면에서:
+- **R2 bucket (`LOGS_BUCKET`)**: Logpush job이 쓰고 있는 버킷 이름(`sh-logpush-test`)으로 맞춰주세요.
+  다른 이름이면 새 빈 버킷이 만들어져 조회 결과가 비어 나옵니다.
+- **`LOOKUP_TOKEN`**: 길고 무작위인 문자열 (예: `openssl rand -hex 32`). 조회할 때 이 값을 씁니다.
+- 나머지 값(`HTTP_LOG_PREFIX` 등)은 기본값 그대로 두면 됩니다.
+
+### 방법 B — 로컬에서 wrangler
 
 ```bash
 npm install
